@@ -30,9 +30,9 @@ namespace Neo.CLI
             {
                 tx = CurrentWallet.MakeTransaction(script);
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException e)
             {
-                Console.WriteLine("Engine faulted.");
+                Console.WriteLine("Error: " + GetExceptionMessage(e));
                 return;
             }
             Console.WriteLine($"Script hash: {scriptHash.ToString()}");
@@ -49,37 +49,15 @@ namespace Neo.CLI
         /// <param name="contractParameters">Contract parameters</param>
         /// <param name="witnessAddress">Witness address</param>
         [ConsoleCommand("invoke", Category = "Contract Commands")]
-        private void OnInvokeCommand(UInt160 scriptHash, string operation, JArray contractParameters = null, UInt160[] witnessAddress = null)
+        private void OnInvokeCommand(UInt160 scriptHash, string operation, JArray contractParameters = null, UInt160[] signerAccounts = null)
         {
-            List<Cosigner> signCollection = new List<Cosigner>();
-
-            if (witnessAddress != null && !NoWallet())
-            {
-                using (SnapshotView snapshot = Blockchain.Singleton.GetSnapshot())
-                {
-                    UInt160[] accounts = CurrentWallet.GetAccounts().Where(p => !p.Lock && !p.WatchOnly).Select(p => p.ScriptHash).Where(p => NativeContract.GAS.BalanceOf(snapshot, p).Sign > 0).ToArray();
-                    foreach (var signAccount in accounts)
-                    {
-                        if (witnessAddress is null)
-                        {
-                            break;
-                        }
-                        foreach (var witness in witnessAddress)
-                        {
-                            if (witness.Equals(signAccount))
-                            {
-                                signCollection.Add(new Cosigner() { Account = signAccount });
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+            Signer[] signers = Array.Empty<Signer>();
+            if (signerAccounts != null && !NoWallet())
+                signers = CurrentWallet.GetAccounts().Where(p => !p.Lock && !p.WatchOnly && signerAccounts.Contains(p.ScriptHash)).Select(p => new Signer() { Account = p.ScriptHash, Scopes = WitnessScope.CalledByEntry }).ToArray();
 
             Transaction tx = new Transaction
             {
-                Sender = UInt160.Zero,
-                Attributes = signCollection.ToArray(),
+                Signers = signers,
                 Witnesses = Array.Empty<Witness>(),
             };
 
@@ -88,11 +66,11 @@ namespace Neo.CLI
             if (NoWallet()) return;
             try
             {
-                tx = CurrentWallet.MakeTransaction(tx.Script, null, tx.Attributes);
+                tx = CurrentWallet.MakeTransaction(tx.Script, signers.Length > 0 ? signers[0].Account : null, signers);
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException e)
             {
-                Console.WriteLine("Error: insufficient balance.");
+                Console.WriteLine("Error: " + GetExceptionMessage(e));
                 return;
             }
             if (!ReadUserInput("Relay tx(no|yes)").IsYes())
